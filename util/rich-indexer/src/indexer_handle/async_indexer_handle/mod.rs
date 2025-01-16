@@ -23,12 +23,17 @@ use std::sync::{Arc, RwLock};
 pub struct AsyncRichIndexerHandle {
     store: SQLXPool,
     pool: Option<Arc<RwLock<Pool>>>,
+    request_limit: usize,
 }
 
 impl AsyncRichIndexerHandle {
     /// Construct new AsyncRichIndexerHandle instance
-    pub fn new(store: SQLXPool, pool: Option<Arc<RwLock<Pool>>>) -> Self {
-        Self { store, pool }
+    pub fn new(store: SQLXPool, pool: Option<Arc<RwLock<Pool>>>, request_limit: usize) -> Self {
+        Self {
+            store,
+            pool,
+            request_limit,
+        }
     }
 }
 
@@ -81,19 +86,19 @@ fn build_query_script_sql(
         .field("script.code_hash")
         .field("script.hash_type")
         .field("script.args")
-        .and_where_eq("code_hash", &format!("${}", param_index));
+        .and_where_eq("code_hash", format!("${}", param_index));
     *param_index += 1;
-    query_builder.and_where_eq("hash_type", &format!("${}", param_index));
+    query_builder.and_where_eq("hash_type", format!("${}", param_index));
     *param_index += 1;
     match script_search_mode {
         Some(IndexerSearchMode::Prefix) | None => {
-            query_builder.and_where_ge("args", &format!("${}", param_index));
+            query_builder.and_where_ge("args", format!("${}", param_index));
             *param_index += 1;
-            query_builder.and_where_lt("args", &format!("${}", param_index));
+            query_builder.and_where_lt("args", format!("${}", param_index));
             *param_index += 1;
         }
         Some(IndexerSearchMode::Exact) => {
-            query_builder.and_where_eq("args", &format!("${}", param_index));
+            query_builder.and_where_eq("args", format!("${}", param_index));
             *param_index += 1;
         }
         Some(IndexerSearchMode::Partial) => {
@@ -122,19 +127,19 @@ fn build_query_script_id_sql(
     let mut query_builder = SqlBuilder::select_from("script");
     query_builder
         .field("script.id")
-        .and_where_eq("code_hash", &format!("${}", param_index));
+        .and_where_eq("code_hash", format!("${}", param_index));
     *param_index += 1;
-    query_builder.and_where_eq("hash_type", &format!("${}", param_index));
+    query_builder.and_where_eq("hash_type", format!("${}", param_index));
     *param_index += 1;
     match script_search_mode {
         Some(IndexerSearchMode::Prefix) | None => {
-            query_builder.and_where_ge("args", &format!("${}", param_index));
+            query_builder.and_where_ge("args", format!("${}", param_index));
             *param_index += 1;
-            query_builder.and_where_lt("args", &format!("${}", param_index));
+            query_builder.and_where_lt("args", format!("${}", param_index));
             *param_index += 1;
         }
         Some(IndexerSearchMode::Exact) => {
-            query_builder.and_where_eq("args", &format!("${}", param_index));
+            query_builder.and_where_eq("args", format!("${}", param_index));
             *param_index += 1;
         }
         Some(IndexerSearchMode::Partial) => {
@@ -173,9 +178,9 @@ fn build_cell_filter(
                     query_builder
                         .and_where_eq("type_script.hash_type", format!("${}", param_index));
                     *param_index += 1;
-                    query_builder.and_where_ge("type_script.args", &format!("${}", param_index));
+                    query_builder.and_where_ge("type_script.args", format!("${}", param_index));
                     *param_index += 1;
-                    query_builder.and_where_lt("type_script.args", &format!("${}", param_index));
+                    query_builder.and_where_lt("type_script.args", format!("${}", param_index));
                     *param_index += 1;
                 }
                 IndexerScriptType::Type => {
@@ -185,9 +190,9 @@ fn build_cell_filter(
                     query_builder
                         .and_where_eq("lock_script.hash_type", format!("${}", param_index));
                     *param_index += 1;
-                    query_builder.and_where_ge("lock_script.args", &format!("${}", param_index));
+                    query_builder.and_where_ge("lock_script.args", format!("${}", param_index));
                     *param_index += 1;
-                    query_builder.and_where_lt("lock_script.args", &format!("${}", param_index));
+                    query_builder.and_where_lt("lock_script.args", format!("${}", param_index));
                     *param_index += 1;
                 }
             }
@@ -217,9 +222,9 @@ fn build_cell_filter(
         if filter.output_data.is_some() {
             match filter.output_data_filter_mode {
                 Some(IndexerSearchMode::Prefix) | None => {
-                    query_builder.and_where_ge("output.data", &format!("${}", param_index));
+                    query_builder.and_where_ge("output.data", format!("${}", param_index));
                     *param_index += 1;
-                    query_builder.and_where_lt("output.data", &format!("${}", param_index));
+                    query_builder.and_where_lt("output.data", format!("${}", param_index));
                     *param_index += 1;
                 }
                 Some(IndexerSearchMode::Exact) => {

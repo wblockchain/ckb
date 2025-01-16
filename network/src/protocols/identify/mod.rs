@@ -1,9 +1,9 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{atomic::Ordering, Arc};
-use std::time::{Duration, Instant};
 
 use ckb_logger::{debug, error, trace, warn};
+use ckb_systemtime::{Duration, Instant};
 use p2p::{
     async_trait,
     bytes::Bytes,
@@ -31,6 +31,7 @@ const DEFAULT_TIMEOUT: u64 = 8;
 const MAX_ADDRS: usize = 10;
 
 /// The misbehavior to report to underlying peer storage
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum Misbehavior {
     /// Repeat received message

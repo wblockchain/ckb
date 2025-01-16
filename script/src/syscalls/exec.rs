@@ -1,11 +1,13 @@
 use crate::cost_model::transferred_byte_cycles;
 use crate::syscalls::utils::load_c_string;
 use crate::syscalls::{
-    Place, Source, SourceEntry, EXEC, INDEX_OUT_OF_BOUND, SLICE_OUT_OF_BOUND, WRONG_FORMAT,
+    Place, Source, SourceEntry, EXEC, INDEX_OUT_OF_BOUND, MAX_ARGV_LENGTH, SLICE_OUT_OF_BOUND,
+    WRONG_FORMAT,
 };
 use crate::types::Indices;
 use ckb_traits::CellDataProvider;
 use ckb_types::core::cell::{CellMeta, ResolvedTransaction};
+use ckb_types::core::error::ARGV_TOO_LONG_TEXT;
 use ckb_types::packed::{Bytes as PackedBytes, BytesVec};
 use ckb_vm::Memory;
 use ckb_vm::{
@@ -22,6 +24,7 @@ pub struct Exec<DL> {
     outputs: Arc<Vec<CellMeta>>,
     group_inputs: Indices,
     group_outputs: Indices,
+    load_elf_base_fee: u64,
 }
 
 impl<DL: CellDataProvider> Exec<DL> {
@@ -31,6 +34,7 @@ impl<DL: CellDataProvider> Exec<DL> {
         outputs: Arc<Vec<CellMeta>>,
         group_inputs: Indices,
         group_outputs: Indices,
+        load_elf_base_fee: u64,
     ) -> Exec<DL> {
         Exec {
             data_loader,
@@ -38,6 +42,7 @@ impl<DL: CellDataProvider> Exec<DL> {
             outputs,
             group_inputs,
             group_outputs,
+            load_elf_base_fee,
         }
     }
 
@@ -109,7 +114,6 @@ impl<Mac: SupportMachine, DL: CellDataProvider + Send + Sync> Syscalls<Mac> for 
         if machine.registers()[A7].to_u64() != EXEC {
             return Ok(false);
         }
-
         let index = machine.registers()[A0].to_u64();
         let source = Source::parse_from_u64(machine.registers()[A1].to_u64())?;
         let place = Place::parse_from_u64(machine.registers()[A2].to_u64())?;
@@ -160,6 +164,7 @@ impl<Mac: SupportMachine, DL: CellDataProvider + Send + Sync> Syscalls<Mac> for 
         let argc = machine.registers()[A4].to_u64();
         let mut addr = machine.registers()[A5].to_u64();
         let mut argv = Vec::new();
+        let mut argv_length: u64 = 0;
         for _ in 0..argc {
             let target_addr = machine
                 .memory_mut()
@@ -167,7 +172,17 @@ impl<Mac: SupportMachine, DL: CellDataProvider + Send + Sync> Syscalls<Mac> for 
                 .to_u64();
 
             let cstr = load_c_string(machine, target_addr)?;
+            let cstr_len = cstr.len();
             argv.push(cstr);
+
+            // Number of argv entries should also be considered
+            argv_length = argv_length
+                .saturating_add(8)
+                .saturating_add(cstr_len as u64);
+            if argv_length > MAX_ARGV_LENGTH {
+                return Err(VMError::Unexpected(ARGV_TOO_LONG_TEXT.to_string()));
+            }
+
             addr += 8;
         }
 
@@ -176,6 +191,7 @@ impl<Mac: SupportMachine, DL: CellDataProvider + Send + Sync> Syscalls<Mac> for 
         machine.reset(max_cycles);
         machine.set_cycles(cycles);
 
+        machine.add_cycles_no_checking(self.load_elf_base_fee)?;
         match machine.load_elf(&data, true) {
             Ok(size) => {
                 machine.add_cycles_no_checking(transferred_byte_cycles(size))?;

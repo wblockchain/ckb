@@ -6,6 +6,7 @@ use crate::{
     extract_peer_id, Peer, PeerId, SessionType,
 };
 use ckb_logger::debug;
+use ckb_systemtime::Instant;
 use p2p::{multiaddr::Multiaddr, SessionId};
 use rand::seq::SliceRandom;
 use rand::thread_rng;
@@ -132,11 +133,11 @@ impl PeerRegistry {
                 let peer1_ping = peer1
                     .ping_rtt
                     .map(|p| p.as_secs())
-                    .unwrap_or_else(|| std::u64::MAX);
+                    .unwrap_or_else(|| u64::MAX);
                 let peer2_ping = peer2
                     .ping_rtt
                     .map(|p| p.as_secs())
-                    .unwrap_or_else(|| std::u64::MAX);
+                    .unwrap_or_else(|| u64::MAX);
                 peer2_ping.cmp(&peer1_ping)
             },
         );
@@ -146,15 +147,15 @@ impl PeerRegistry {
             &mut candidate_peers,
             EVICTION_PROTECT_PEERS,
             |peer1, peer2| {
-                let now = std::time::Instant::now();
+                let now = Instant::now();
                 let peer1_last_message = peer1
                     .last_ping_protocol_message_received_at
                     .map(|t| now.saturating_duration_since(t).as_secs())
-                    .unwrap_or_else(|| std::u64::MAX);
+                    .unwrap_or_else(|| u64::MAX);
                 let peer2_last_message = peer2
                     .last_ping_protocol_message_received_at
                     .map(|t| now.saturating_duration_since(t).as_secs())
-                    .unwrap_or_else(|| std::u64::MAX);
+                    .unwrap_or_else(|| u64::MAX);
                 peer2_last_message.cmp(&peer1_last_message)
             },
         );
