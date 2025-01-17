@@ -1,4 +1,5 @@
 mod db;
+mod fee_estimator;
 mod indexer;
 mod memory_tracker;
 mod miner;
@@ -11,6 +12,7 @@ mod store;
 mod tx_pool;
 
 pub use db::Config as DBConfig;
+pub use fee_estimator::{Algorithm as FeeEstimatorAlgo, Config as FeeEstimatorConfig};
 pub use indexer::{IndexerConfig, IndexerSyncConfig};
 pub use memory_tracker::Config as MemoryTrackerConfig;
 pub use miner::{
@@ -28,4 +30,4 @@ pub use rpc::{Config as RpcConfig, Module as RpcModule};
 pub use store::Config as StoreConfig;
 pub use tx_pool::{BlockAssemblerConfig, TxPoolConfig};
 
-pub(crate) use network::{generate_random_key, read_secret_key, write_secret_to_file};
+pub use network::{generate_random_key, read_secret_key, write_secret_to_file};

@@ -25,7 +25,7 @@ use std::fmt::{Debug, Display};
 ///
 /// * -1 ~ -999 are general errors
 /// * -1000 ~ -2999 are module-specific errors. Each module generally gets 100 reserved error
-/// codes.
+///   codes.
 ///
 /// Unless otherwise noted, all the errors return optional detailed information as `string` in the error
 /// object `data` field.
@@ -121,6 +121,14 @@ pub enum RPCError {
     Indexer = -1200,
 }
 
+/// Removes the backtrace portion from an error string.
+fn remove_backtrace(err_str: &str) -> &str {
+    match err_str.find("\nStack backtrace:") {
+        Some(idx) => &err_str[..idx],
+        None => err_str,
+    }
+}
+
 impl RPCError {
     /// Invalid method parameter(s).
     pub fn invalid_params<T: Display>(message: T) -> Error {
@@ -158,10 +166,12 @@ impl RPCError {
     /// The parameter `err` is usually an std error. The Display form is used as the error message,
     /// and the Debug form is used as the data.
     pub fn custom_with_error<T: Display + Debug>(error_code: RPCError, err: T) -> Error {
+        let err_str_with_backtrace = format!("{err:?}");
+        let err_str = remove_backtrace(&err_str_with_backtrace);
         Error {
             code: ErrorCode::ServerError(error_code as i64),
             message: format!("{error_code:?}: {err}"),
-            data: Some(Value::String(format!("{err:?}"))),
+            data: Some(Value::String(err_str.to_string())),
         }
     }
 

@@ -1,10 +1,7 @@
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use ckb_logger::{debug, error, trace, warn};
+use ckb_systemtime::{Duration, Instant};
 use p2p::{
     async_trait, bytes,
     context::{ProtocolContext, ProtocolContextMutRef, SessionContext},
@@ -328,10 +325,10 @@ impl AddressManager for DiscoveryAddressManager {
 
     fn is_valid_addr(&self, addr: &Multiaddr) -> bool {
         if !self.discovery_local_address {
-            let local_or_invalid = multiaddr_to_socketaddr(addr)
-                .map(|socket_addr| !is_reachable(socket_addr.ip()))
-                .unwrap_or(true);
-            !local_or_invalid
+            match multiaddr_to_socketaddr(addr) {
+                Some(socket_addr) => is_reachable(socket_addr.ip()),
+                None => true,
+            }
         } else {
             true
         }

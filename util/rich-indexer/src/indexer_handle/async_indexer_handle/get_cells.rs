@@ -26,6 +26,12 @@ impl AsyncRichIndexerHandle {
         if limit == 0 {
             return Err(Error::invalid_params("limit should be greater than 0"));
         }
+        if limit as usize > self.request_limit {
+            return Err(Error::invalid_params(format!(
+                "limit must be less than {}",
+                self.request_limit,
+            )));
+        }
 
         let mut param_index = 1;
 
@@ -74,7 +80,7 @@ impl AsyncRichIndexerHandle {
                 query_builder.field("NULL as output_data");
             }
         }
-        query_builder.join(&format!("{} AS query_script", script_sub_query_sql));
+        query_builder.join(format!("{} AS query_script", script_sub_query_sql));
         match search_key.script_type {
             IndexerScriptType::Lock => {
                 query_builder.on("output.lock_script_id = query_script.id");
@@ -98,9 +104,7 @@ impl AsyncRichIndexerHandle {
                 .join(name!("script";"lock_script"))
                 .on("output.lock_script_id = lock_script.id"),
         }
-        .join("input")
-        .on("output.id = input.output_id")
-        .and_where("input.output_id IS NULL"); // live cells
+        .and_where("output.is_spent = 0"); // live cells
 
         // filter cells in pool
         let mut dead_cells = Vec::new();

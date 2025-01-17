@@ -1,5 +1,5 @@
 use crate::types::{ScriptGroup, ScriptGroupType};
-use ckb_error::{prelude::*, Error, ErrorKind};
+use ckb_error::{prelude::*, Error, ErrorKind, InternalErrorKind};
 use ckb_types::core::{Cycle, ScriptHashType};
 use ckb_types::packed::{Byte32, Script};
 use ckb_vm::Error as VMInternalError;
@@ -43,6 +43,10 @@ pub enum ScriptError {
     /// Errors thrown by ckb-vm
     #[error("VM Internal Error: {0:?}")]
     VMInternalError(VMInternalError),
+
+    /// Interrupts, such as a Ctrl-C signal
+    #[error("VM Interrupts")]
+    Interrupts,
 
     /// Other errors raised in script execution process
     #[error("Other Error: {0}")]
@@ -182,13 +186,18 @@ impl ScriptError {
 
 impl From<TransactionScriptError> for Error {
     fn from(error: TransactionScriptError) -> Self {
-        ErrorKind::Script.because(error)
+        match error.cause {
+            ScriptError::Interrupts => ErrorKind::Internal
+                .because(InternalErrorKind::Interrupts.other(ScriptError::Interrupts.to_string())),
+            _ => ErrorKind::Script.because(error),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckb_types::core::error::ARGV_TOO_LONG_TEXT;
 
     #[test]
     fn test_downcast_error_to_vm_error() {
@@ -216,5 +225,14 @@ mod tests {
                 recovered_transaction_error.script_error()
             );
         }
+    }
+
+    #[test]
+    fn test_vm_internal_error_preserves_text() {
+        let vm_error = VMInternalError::Unexpected(ARGV_TOO_LONG_TEXT.to_string());
+        let script_error = ScriptError::VMInternalError(vm_error);
+        let error: Error = script_error.output_type_script(177).into();
+
+        assert!(format!("{}", error).contains(ARGV_TOO_LONG_TEXT));
     }
 }
