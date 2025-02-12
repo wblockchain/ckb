@@ -4,11 +4,11 @@ use std::{
 };
 
 use ckb_app_config::{BlockAssemblerConfig, NetworkConfig};
-use ckb_chain::chain::{ChainController, ChainService};
+use ckb_chain::{start_chain_services, ChainController};
 use ckb_chain_spec::consensus::{build_genesis_epoch_ext, ConsensusBuilder};
 use ckb_dao_utils::genesis_dao_data;
 use ckb_jsonrpc_types::ScriptHashType;
-use ckb_network::{Flags, NetworkController, NetworkService, NetworkState};
+use ckb_network::{network::TransportType, Flags, NetworkController, NetworkService, NetworkState};
 use ckb_shared::{Shared, SharedBuilder};
 use ckb_systemtime::unix_time_as_millis;
 use ckb_test_chain_utils::always_success_cell;
@@ -87,8 +87,7 @@ impl MockChain {
         let network = dummy_network(&shared);
         pack.take_tx_pool_builder().start(network);
 
-        let chain_service = ChainService::new(shared.clone(), pack.take_proposal_table());
-        let chain_controller = chain_service.start::<&str>(None);
+        let chain_controller = start_chain_services(pack.take_chain_services_builder());
 
         Self {
             chain_controller,
@@ -144,7 +143,7 @@ impl MockChain {
         let block_number = block.number();
         let is_ok = self
             .controller()
-            .process_block(Arc::new(block))
+            .blocking_process_block(Arc::new(block))
             .expect("process block");
         assert!(is_ok, "failed to process block {block_number}");
         while self
@@ -241,6 +240,7 @@ fn dummy_network(shared: &Shared) -> NetworkController {
             "test".to_string(),
             Flags::all(),
         ),
+        TransportType::Tcp,
     )
     .start(shared.async_handle())
     .expect("Start network service failed")

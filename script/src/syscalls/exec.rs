@@ -1,12 +1,14 @@
 use crate::cost_model::transferred_byte_cycles;
-use crate::syscalls::utils::load_c_string;
 use crate::syscalls::{
-    Place, Source, SourceEntry, EXEC, INDEX_OUT_OF_BOUND, SLICE_OUT_OF_BOUND, WRONG_FORMAT,
+    Place, Source, SourceEntry, EXEC, INDEX_OUT_OF_BOUND, MAX_ARGV_LENGTH, SLICE_OUT_OF_BOUND,
+    WRONG_FORMAT,
 };
 use crate::types::Indices;
 use ckb_traits::CellDataProvider;
 use ckb_types::core::cell::{CellMeta, ResolvedTransaction};
+use ckb_types::core::error::ARGV_TOO_LONG_TEXT;
 use ckb_types::packed::{Bytes as PackedBytes, BytesVec};
+use ckb_vm::memory::load_c_string_byte_by_byte;
 use ckb_vm::Memory;
 use ckb_vm::{
     registers::{A0, A1, A2, A3, A4, A5, A7},
@@ -109,7 +111,6 @@ impl<Mac: SupportMachine, DL: CellDataProvider + Send + Sync> Syscalls<Mac> for 
         if machine.registers()[A7].to_u64() != EXEC {
             return Ok(false);
         }
-
         let index = machine.registers()[A0].to_u64();
         let source = Source::parse_from_u64(machine.registers()[A1].to_u64())?;
         let place = Place::parse_from_u64(machine.registers()[A2].to_u64())?;
@@ -150,6 +151,7 @@ impl<Mac: SupportMachine, DL: CellDataProvider + Send + Sync> Syscalls<Mac> for 
         let data = if length == 0 {
             data.slice(offset..data_size)
         } else {
+            // Both offset and length are <= u32::MAX, so offset.checked_add(length) will be always a Some.
             let end = offset.checked_add(length).ok_or(VMError::MemOutOfBound)?;
             if end > data_size {
                 machine.set_register(A0, Mac::REG::from_u8(SLICE_OUT_OF_BOUND));
@@ -160,14 +162,21 @@ impl<Mac: SupportMachine, DL: CellDataProvider + Send + Sync> Syscalls<Mac> for 
         let argc = machine.registers()[A4].to_u64();
         let mut addr = machine.registers()[A5].to_u64();
         let mut argv = Vec::new();
+        let mut argv_length: u64 = 0;
         for _ in 0..argc {
-            let target_addr = machine
-                .memory_mut()
-                .load64(&Mac::REG::from_u64(addr))?
-                .to_u64();
-
-            let cstr = load_c_string(machine, target_addr)?;
+            let target_addr = machine.memory_mut().load64(&Mac::REG::from_u64(addr))?;
+            let cstr = load_c_string_byte_by_byte(machine.memory_mut(), &target_addr)?;
+            let cstr_len = cstr.len();
             argv.push(cstr);
+
+            // Number of argv entries should also be considered
+            argv_length = argv_length
+                .saturating_add(8)
+                .saturating_add(cstr_len as u64);
+            if argv_length > MAX_ARGV_LENGTH {
+                return Err(VMError::Unexpected(ARGV_TOO_LONG_TEXT.to_string()));
+            }
+
             addr += 8;
         }
 
@@ -187,7 +196,7 @@ impl<Mac: SupportMachine, DL: CellDataProvider + Send + Sync> Syscalls<Mac> for 
         }
 
         match machine.initialize_stack(
-            &argv,
+            argv.into_iter().map(Ok),
             (RISCV_MAX_MEMORY - DEFAULT_STACK_SIZE) as u64,
             DEFAULT_STACK_SIZE as u64,
         ) {
