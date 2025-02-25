@@ -1,17 +1,27 @@
-use crate::syscalls::CURRENT_CYCLES;
+use crate::{syscalls::CURRENT_CYCLES, types::VmContext};
+use ckb_traits::{CellDataProvider, ExtensionProvider, HeaderProvider};
 use ckb_vm::{
     registers::{A0, A7},
     Error as VMError, Register, SupportMachine, Syscalls,
 };
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 
 #[derive(Debug, Default)]
 pub struct CurrentCycles {
-    base: u64,
+    base: Arc<AtomicU64>,
 }
 
 impl CurrentCycles {
-    pub fn new(base: u64) -> Self {
-        Self { base }
+    pub fn new<DL>(vm_context: &VmContext<DL>) -> Self
+    where
+        DL: CellDataProvider + HeaderProvider + ExtensionProvider + Send + Sync + Clone + 'static,
+    {
+        Self {
+            base: Arc::clone(&vm_context.base_cycles),
+        }
     }
 }
 
@@ -26,6 +36,7 @@ impl<Mac: SupportMachine> Syscalls<Mac> for CurrentCycles {
         }
         let cycles = self
             .base
+            .load(Ordering::Acquire)
             .checked_add(machine.cycles())
             .ok_or(VMError::CyclesOverflow)?;
         machine.set_register(A0, Mac::REG::from_u64(cycles));

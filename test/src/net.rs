@@ -6,9 +6,9 @@ use ckb_chain_spec::consensus::Consensus;
 use ckb_channel::{self as channel, unbounded, Receiver, RecvTimeoutError, Sender};
 use ckb_logger::info;
 use ckb_network::{
-    async_trait, bytes::Bytes, extract_peer_id, CKBProtocol, CKBProtocolContext,
-    CKBProtocolHandler, Flags, NetworkController, NetworkService, NetworkState, PeerIndex,
-    ProtocolId, SupportProtocols,
+    async_trait, bytes::Bytes, extract_peer_id, network::TransportType, CKBProtocol,
+    CKBProtocolContext, CKBProtocolHandler, Flags, NetworkController, NetworkService, NetworkState,
+    PeerIndex, ProtocolId, SupportProtocols,
 };
 use ckb_util::Mutex;
 use std::collections::HashMap;
@@ -73,6 +73,7 @@ impl Net {
                 "0.1.0".to_string(),
                 Flags::COMPATIBILITY,
             ),
+            TransportType::Tcp,
         )
         .start(&async_handle)
         .unwrap();
@@ -140,7 +141,7 @@ impl Net {
         let protocol_id = protocol.protocol_id();
         let peer_index = self
             .receivers
-            .get(node_id)
+            .get(&node_id)
             .map(|(peer_index, _)| *peer_index)
             .unwrap_or_else(|| panic!("not connected peer {}", node.p2p_address()));
         self.controller()
@@ -156,7 +157,7 @@ impl Net {
         let node_id = node.node_id();
         let (peer_index, receiver) = self
             .receivers
-            .get(node_id)
+            .get(&node_id)
             .unwrap_or_else(|| panic!("not connected peer {}", node.p2p_address()));
         let net_message = receiver.recv_timeout(timeout)?;
         info!(

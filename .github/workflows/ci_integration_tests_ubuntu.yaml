@@ -57,7 +57,7 @@ jobs:
     - uses: actions-rs/toolchain@v1
       with:
         profile: minimal
-        toolchain: 1.75.0
+        toolchain: 1.81.0
     - run: rustup component add rustfmt
     - run: rustup component add clippy
     - run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config libclang-dev
@@ -72,7 +72,7 @@ jobs:
       shell: bash
     - name: upload log files
       if: always()
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ runner.os }}_integration.log
         path: ${{ env.CKB_INTEGRATION_TEST_TMP }}/integration.log
@@ -86,7 +86,7 @@ jobs:
     - uses: actions-rs/toolchain@v1
       with:
         profile: minimal
-        toolchain: 1.75.0
+        toolchain: 1.81.0
     - run: rustup component add rustfmt
     - run: rustup component add clippy
     - run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config libclang-dev

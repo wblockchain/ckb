@@ -1,6 +1,6 @@
 [package]
 name = "ckb-systemtime"
-version = "0.117.0-pre"
+version = "0.200.0-pre"
 license = "MIT"
 authors = ["Nervos <dev@nervos.org>"]
 edition = "2021"
@@ -9,6 +9,9 @@ homepage = "https://github.com/nervosnetwork/ckb"
 repository = "https://github.com/nervosnetwork/ckb"
 
 [dependencies]
+
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+web-time = "1.1.0"
 
 [dev-dependencies]
 

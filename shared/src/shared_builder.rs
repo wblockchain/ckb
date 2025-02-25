@@ -1,34 +1,38 @@
 //! shared_builder provide SharedBuilder and SharedPacakge
-use ckb_channel::Receiver;
-use ckb_proposal_table::ProposalTable;
-use ckb_tx_pool::service::TxVerificationResult;
-use ckb_tx_pool::{TokioRwLock, TxEntry, TxPool, TxPoolServiceBuilder};
-use std::cmp::Ordering;
-
-use ckb_chain_spec::consensus::Consensus;
-use ckb_chain_spec::SpecError;
-
-use crate::Shared;
-use ckb_proposal_table::ProposalView;
-use ckb_snapshot::{Snapshot, SnapshotMgr};
-
+use crate::ChainServicesBuilder;
+use crate::{HeaderMap, Shared};
 use ckb_app_config::{
-    BlockAssemblerConfig, DBConfig, ExitCode, NotifyConfig, StoreConfig, TxPoolConfig,
+    BlockAssemblerConfig, DBConfig, ExitCode, FeeEstimatorAlgo, FeeEstimatorConfig, NotifyConfig,
+    StoreConfig, SyncConfig, TxPoolConfig,
 };
 use ckb_async_runtime::{new_background_runtime, Handle};
+use ckb_chain_spec::consensus::Consensus;
+use ckb_chain_spec::SpecError;
+use ckb_channel::Receiver;
 use ckb_db::RocksDB;
 use ckb_db_schema::COLUMNS;
 use ckb_error::{Error, InternalErrorKind};
+use ckb_fee_estimator::FeeEstimator;
 use ckb_logger::{error, info};
 use ckb_migrate::migrate::Migrate;
 use ckb_notify::{NotifyController, NotifyService};
+use ckb_proposal_table::ProposalTable;
+use ckb_proposal_table::ProposalView;
+use ckb_snapshot::{Snapshot, SnapshotMgr};
 use ckb_store::{ChainDB, ChainStore, Freezer};
+use ckb_tx_pool::{
+    service::TxVerificationResult, TokioRwLock, TxEntry, TxPool, TxPoolServiceBuilder,
+};
 use ckb_types::core::hardfork::HardForks;
-use ckb_types::core::service::PoolTransactionEntry;
-use ckb_types::core::tx_pool::Reject;
-use ckb_types::core::EpochExt;
-use ckb_types::core::HeaderView;
+use ckb_types::prelude::Pack;
+use ckb_types::H256;
+use ckb_types::{
+    core::service::PoolTransactionEntry, core::tx_pool::Reject, core::EpochExt, core::HeaderView,
+};
+use ckb_util::Mutex;
 use ckb_verification::cache::init_cache;
+use dashmap::DashMap;
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -42,9 +46,13 @@ pub struct SharedBuilder {
     consensus: Consensus,
     tx_pool_config: Option<TxPoolConfig>,
     store_config: Option<StoreConfig>,
+    sync_config: Option<SyncConfig>,
     block_assembler_config: Option<BlockAssemblerConfig>,
     notify_config: Option<NotifyConfig>,
     async_handle: Handle,
+    fee_estimator_config: Option<FeeEstimatorConfig>,
+
+    header_map_tmp_dir: Option<PathBuf>,
 }
 
 /// Open or create a rocksdb
@@ -146,15 +154,17 @@ impl SharedBuilder {
             tx_pool_config: None,
             notify_config: None,
             store_config: None,
+            sync_config: None,
             block_assembler_config: None,
             async_handle,
+            fee_estimator_config: None,
+            header_map_tmp_dir: None,
         })
     }
 
     /// Generates the SharedBuilder with temp db
     /// NOTICE: this is only used in testing
     pub fn with_temp_db() -> Self {
-        use once_cell::{sync, unsync};
         use std::{
             borrow::Borrow,
             sync::atomic::{AtomicUsize, Ordering},
@@ -166,18 +176,17 @@ impl SharedBuilder {
         thread_local! {
             // NOTICE：we can't put the runtime directly into thread_local here,
             // on windows the runtime in thread_local will get stuck when dropping
-            static RUNTIME_HANDLE: unsync::OnceCell<Handle> = unsync::OnceCell::new();
+            static RUNTIME_HANDLE: std::cell::OnceCell<Handle> = const { std::cell::OnceCell::new() };
         }
 
         static DB_COUNT: AtomicUsize = AtomicUsize::new(0);
-        static TMP_DIR: sync::OnceCell<TempDir> = sync::OnceCell::new();
+        static TMP_DIR: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
 
         let db = {
             let db_id = DB_COUNT.fetch_add(1, Ordering::SeqCst);
             let db_base_dir = TMP_DIR
                 .borrow()
-                .get_or_try_init(TempDir::new)
-                .unwrap()
+                .get_or_init(|| TempDir::new().unwrap())
                 .path()
                 .to_path_buf();
             let db_dir = db_base_dir.join(format!("db_{db_id}"));
@@ -191,8 +200,12 @@ impl SharedBuilder {
             tx_pool_config: None,
             notify_config: None,
             store_config: None,
+            sync_config: None,
             block_assembler_config: None,
             async_handle: runtime.get_or_init(new_background_runtime).clone(),
+            fee_estimator_config: None,
+
+            header_map_tmp_dir: None,
         })
     }
 }
@@ -222,9 +235,27 @@ impl SharedBuilder {
         self
     }
 
+    /// TODO(doc): @eval-exec
+    pub fn sync_config(mut self, config: SyncConfig) -> Self {
+        self.sync_config = Some(config);
+        self
+    }
+
+    /// TODO(doc): @eval-exec
+    pub fn header_map_tmp_dir(mut self, header_map_tmp_dir: Option<PathBuf>) -> Self {
+        self.header_map_tmp_dir = header_map_tmp_dir;
+        self
+    }
+
     /// TODO(doc): @quake
     pub fn block_assembler_config(mut self, config: Option<BlockAssemblerConfig>) -> Self {
         self.block_assembler_config = config;
+        self
+    }
+
+    /// Sets the configuration for the fee estimator.
+    pub fn fee_estimator_config(mut self, config: FeeEstimatorConfig) -> Self {
+        self.fee_estimator_config = Some(config);
         self
     }
 
@@ -325,15 +356,30 @@ impl SharedBuilder {
             consensus,
             tx_pool_config,
             store_config,
+            sync_config,
             block_assembler_config,
             notify_config,
             async_handle,
+            fee_estimator_config,
+            header_map_tmp_dir,
         } = self;
 
         let tx_pool_config = tx_pool_config.unwrap_or_default();
         let notify_config = notify_config.unwrap_or_default();
         let store_config = store_config.unwrap_or_default();
+        let sync_config = sync_config.unwrap_or_default();
         let consensus = Arc::new(consensus);
+
+        let header_map_memory_limit = sync_config.header_map.memory_limit.as_u64() as usize;
+
+        let ibd_finished = Arc::new(AtomicBool::new(false));
+
+        let header_map = Arc::new(HeaderMap::new(
+            header_map_tmp_dir,
+            header_map_memory_limit,
+            &async_handle,
+            Arc::clone(&ibd_finished),
+        ));
 
         let notify_controller = start_notify_service(notify_config, async_handle.clone());
 
@@ -354,6 +400,17 @@ impl SharedBuilder {
 
         let (sender, receiver) = ckb_channel::unbounded();
 
+        let fee_estimator_algo = fee_estimator_config
+            .map(|config| config.algorithm)
+            .unwrap_or(None);
+        let fee_estimator = match fee_estimator_algo {
+            Some(FeeEstimatorAlgo::WeightUnitsFlow) => FeeEstimator::new_weight_units_flow(),
+            Some(FeeEstimatorAlgo::ConfirmationFraction) => {
+                FeeEstimator::new_confirmation_fraction()
+            }
+            None => FeeEstimator::new_dummy(),
+        };
+
         let (mut tx_pool_builder, tx_pool_controller) = TxPoolServiceBuilder::new(
             tx_pool_config,
             Arc::clone(&snapshot),
@@ -361,11 +418,50 @@ impl SharedBuilder {
             Arc::clone(&txs_verify_cache),
             &async_handle,
             sender,
+            fee_estimator.clone(),
         );
 
-        register_tx_pool_callback(&mut tx_pool_builder, notify_controller.clone());
+        register_tx_pool_callback(
+            &mut tx_pool_builder,
+            notify_controller.clone(),
+            fee_estimator,
+        );
 
-        let ibd_finished = Arc::new(AtomicBool::new(false));
+        let block_status_map = Arc::new(DashMap::new());
+
+        let assume_valid_targets = Arc::new(Mutex::new({
+            let not_exists_targets: Option<Vec<H256>> =
+                sync_config.assume_valid_targets.clone().map(|targets| {
+                    targets
+                        .iter()
+                        .filter(|&target_hash| {
+                            let exists = snapshot.block_exists(&target_hash.pack());
+                            if exists {
+                                info!("assume-valid target 0x{} exists in local db", target_hash);
+                            }
+                            !exists
+                        })
+                        .cloned()
+                        .collect::<Vec<H256>>()
+                });
+
+            if not_exists_targets
+                .as_ref()
+                .is_some_and(|targets| targets.is_empty())
+            {
+                info!("all assume-valid targets synchronized, enter full verification mode");
+                None
+            } else {
+                not_exists_targets
+            }
+        }));
+
+        let assume_valid_target_specified: Arc<Option<H256>> = Arc::new(
+            sync_config
+                .assume_valid_targets
+                .and_then(|targets| targets.last().cloned()),
+        );
+
         let shared = Shared::new(
             store,
             tx_pool_controller,
@@ -375,10 +471,16 @@ impl SharedBuilder {
             snapshot_mgr,
             async_handle,
             ibd_finished,
+            assume_valid_targets,
+            assume_valid_target_specified,
+            header_map,
+            block_status_map,
         );
 
+        let chain_services_builder = ChainServicesBuilder::new(shared.clone(), table);
+
         let pack = SharedPackage {
-            table: Some(table),
+            chain_services_builder: Some(chain_services_builder),
             tx_pool_builder: Some(tx_pool_builder),
             relay_tx_receiver: Some(receiver),
         };
@@ -387,7 +489,58 @@ impl SharedBuilder {
     }
 }
 
-fn register_tx_pool_callback(tx_pool_builder: &mut TxPoolServiceBuilder, notify: NotifyController) {
+/// SharedBuilder build returning the shared/package halves
+/// The package structs used for init other component
+pub struct SharedPackage {
+    chain_services_builder: Option<ChainServicesBuilder>,
+    tx_pool_builder: Option<TxPoolServiceBuilder>,
+    relay_tx_receiver: Option<Receiver<TxVerificationResult>>,
+}
+
+impl SharedPackage {
+    /// Takes the chain_services_builder out of the package, leaving a None in its place.
+    pub fn take_chain_services_builder(&mut self) -> ChainServicesBuilder {
+        self.chain_services_builder
+            .take()
+            .expect("take chain_services_builder")
+    }
+
+    /// Takes the tx_pool_builder out of the package, leaving a None in its place.
+    pub fn take_tx_pool_builder(&mut self) -> TxPoolServiceBuilder {
+        self.tx_pool_builder.take().expect("take tx_pool_builder")
+    }
+
+    /// Takes the relay_tx_receiver out of the package, leaving a None in its place.
+    pub fn take_relay_tx_receiver(&mut self) -> Receiver<TxVerificationResult> {
+        self.relay_tx_receiver
+            .take()
+            .expect("take relay_tx_receiver")
+    }
+}
+
+fn start_notify_service(notify_config: NotifyConfig, handle: Handle) -> NotifyController {
+    NotifyService::new(notify_config, handle).start()
+}
+
+fn build_store(
+    db: RocksDB,
+    store_config: StoreConfig,
+    ancient_path: Option<PathBuf>,
+) -> Result<ChainDB, Error> {
+    let store = if store_config.freezer_enable && ancient_path.is_some() {
+        let freezer = Freezer::open(ancient_path.expect("exist checked"))?;
+        ChainDB::new_with_freezer(db, freezer, store_config)
+    } else {
+        ChainDB::new(db, store_config)
+    };
+    Ok(store)
+}
+
+fn register_tx_pool_callback(
+    tx_pool_builder: &mut TxPoolServiceBuilder,
+    notify: NotifyController,
+    fee_estimator: FeeEstimator,
+) {
     let notify_pending = notify.clone();
 
     let tx_relay_sender = tx_pool_builder.tx_relay_sender();
@@ -398,10 +551,15 @@ fn register_tx_pool_callback(tx_pool_builder: &mut TxPoolServiceBuilder, notify:
         fee: entry.fee,
         timestamp: entry.timestamp,
     };
+
+    let fee_estimator_clone = fee_estimator.clone();
     tx_pool_builder.register_pending(Box::new(move |entry: &TxEntry| {
         // notify
         let notify_tx_entry = create_notify_entry(entry);
         notify_pending.notify_new_transaction(notify_tx_entry);
+        let tx_hash = entry.transaction().hash();
+        let entry_info = entry.to_info();
+        fee_estimator_clone.accept_tx(tx_hash, entry_info);
     }));
 
     let notify_proposed = notify.clone();
@@ -425,7 +583,9 @@ fn register_tx_pool_callback(tx_pool_builder: &mut TxPoolServiceBuilder, notify:
             }
 
             if reject.is_allowed_relay() {
-                if let Err(e) = tx_relay_sender.send(TxVerificationResult::Reject { tx_hash }) {
+                if let Err(e) = tx_relay_sender.send(TxVerificationResult::Reject {
+                    tx_hash: tx_hash.clone(),
+                }) {
                     error!("tx-pool tx_relay_sender internal error {}", e);
                 }
             }
@@ -433,51 +593,9 @@ fn register_tx_pool_callback(tx_pool_builder: &mut TxPoolServiceBuilder, notify:
             // notify
             let notify_tx_entry = create_notify_entry(entry);
             notify_reject.notify_reject_transaction(notify_tx_entry, reject);
+
+            // fee estimator
+            fee_estimator.reject_tx(&tx_hash);
         },
     ));
-}
-
-fn start_notify_service(notify_config: NotifyConfig, handle: Handle) -> NotifyController {
-    NotifyService::new(notify_config, handle).start()
-}
-
-fn build_store(
-    db: RocksDB,
-    store_config: StoreConfig,
-    ancient_path: Option<PathBuf>,
-) -> Result<ChainDB, Error> {
-    let store = if store_config.freezer_enable && ancient_path.is_some() {
-        let freezer = Freezer::open(ancient_path.expect("exist checked"))?;
-        ChainDB::new_with_freezer(db, freezer, store_config)
-    } else {
-        ChainDB::new(db, store_config)
-    };
-    Ok(store)
-}
-
-/// SharedBuilder build returning the shared/package halves
-/// The package structs used for init other component
-pub struct SharedPackage {
-    table: Option<ProposalTable>,
-    tx_pool_builder: Option<TxPoolServiceBuilder>,
-    relay_tx_receiver: Option<Receiver<TxVerificationResult>>,
-}
-
-impl SharedPackage {
-    /// Takes the proposal_table out of the package, leaving a None in its place.
-    pub fn take_proposal_table(&mut self) -> ProposalTable {
-        self.table.take().expect("take proposal_table")
-    }
-
-    /// Takes the tx_pool_builder out of the package, leaving a None in its place.
-    pub fn take_tx_pool_builder(&mut self) -> TxPoolServiceBuilder {
-        self.tx_pool_builder.take().expect("take tx_pool_builder")
-    }
-
-    /// Takes the relay_tx_receiver out of the package, leaving a None in its place.
-    pub fn take_relay_tx_receiver(&mut self) -> Receiver<TxVerificationResult> {
-        self.relay_tx_receiver
-            .take()
-            .expect("take relay_tx_receiver")
-    }
 }

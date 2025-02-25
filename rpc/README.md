@@ -70,6 +70,7 @@ The crate `ckb-rpc`'s minimum supported rustc version is 1.71.1.
 
         * [Method `dry_run_transaction`](#experiment-dry_run_transaction)
         * [Method `calculate_dao_maximum_withdraw`](#experiment-calculate_dao_maximum_withdraw)
+        * [Method `estimate_fee_rate`](#experiment-estimate_fee_rate)
     * [Module Indexer](#module-indexer) [👉 OpenRPC spec](http://playground.open-rpc.org/?uiSchema[appBar][ui:title]=CKB-Indexer&uiSchema[appBar][ui:splitView]=false&uiSchema[appBar][ui:examplesDropdown]=false&uiSchema[appBar][ui:logoUrl]=https://raw.githubusercontent.com/nervosnetwork/ckb-rpc-resources/develop/ckb-logo.jpg&schemaUrl=https://raw.githubusercontent.com/nervosnetwork/ckb-rpc-resources/develop/json/indexer_rpc_doc.json)
 
         * [Method `get_indexer_tip`](#indexer-get_indexer_tip)
@@ -85,6 +86,7 @@ The crate `ckb-rpc`'s minimum supported rustc version is 1.71.1.
         * [Method `notify_transaction`](#integration_test-notify_transaction)
         * [Method `generate_block_with_template`](#integration_test-generate_block_with_template)
         * [Method `calculate_dao_field`](#integration_test-calculate_dao_field)
+        * [Method `send_test_transaction`](#integration_test-send_test_transaction)
     * [Module Miner](#module-miner) [👉 OpenRPC spec](http://playground.open-rpc.org/?uiSchema[appBar][ui:title]=CKB-Miner&uiSchema[appBar][ui:splitView]=false&uiSchema[appBar][ui:examplesDropdown]=false&uiSchema[appBar][ui:logoUrl]=https://raw.githubusercontent.com/nervosnetwork/ckb-rpc-resources/develop/ckb-logo.jpg&schemaUrl=https://raw.githubusercontent.com/nervosnetwork/ckb-rpc-resources/develop/json/miner_rpc_doc.json)
 
         * [Method `get_block_template`](#miner-get_block_template)
@@ -108,6 +110,7 @@ The crate `ckb-rpc`'s minimum supported rustc version is 1.71.1.
         * [Method `remove_transaction`](#pool-remove_transaction)
         * [Method `tx_pool_info`](#pool-tx_pool_info)
         * [Method `clear_tx_pool`](#pool-clear_tx_pool)
+        * [Method `clear_tx_verify_queue`](#pool-clear_tx_verify_queue)
         * [Method `get_raw_tx_pool`](#pool-get_raw_tx_pool)
         * [Method `get_pool_tx_detail_info`](#pool-get_pool_tx_detail_info)
         * [Method `tx_pool_ready`](#pool-tx_pool_ready)
@@ -169,6 +172,7 @@ The crate `ckb-rpc`'s minimum supported rustc version is 1.71.1.
     * [Type `EpochNumberWithFraction`](#type-epochnumberwithfraction)
     * [Type `EpochView`](#type-epochview)
     * [Type `EstimateCycles`](#type-estimatecycles)
+    * [Type `EstimateMode`](#type-estimatemode)
     * [Type `ExtraLoggerConfig`](#type-extraloggerconfig)
     * [Type `FeeRateStatistics`](#type-feeratestatistics)
     * [Type `H256`](#type-h256)
@@ -925,6 +929,7 @@ Response
       "block_hash": null,
       "block_number": null,
       "status": "pending",
+      "tx_index": null,
       "reason": null
     }
   }
@@ -945,6 +950,7 @@ The response looks like below when `verbosity` is 0.
       "block_hash": null,
       "block_number": null,
       "status": "pending",
+      "tx_index": null,
       "reason": null
     }
   }
@@ -1688,8 +1694,8 @@ Response
             { "rfc": "0032", "epoch_number": "0x1526" },
             { "rfc": "0036", "epoch_number": "0x0" },
             { "rfc": "0038", "epoch_number": "0x0" },
-            { "rfc": "0048", "epoch_number": null },
-            { "rfc": "0049", "epoch_number": null }
+            { "rfc": "0048", "epoch_number": "0x3005" },
+            { "rfc": "0049", "epoch_number": "0x3005" }
          ],
         "id": "main",
         "initial_primary_epoch_reward": "0x71afd498d000",
@@ -2161,6 +2167,62 @@ Response
   "id": 42,
   "jsonrpc": "2.0",
   "result": "0x4a8b4e8a4"
+}
+```
+
+<a id="experiment-estimate_fee_rate"></a>
+#### Method `estimate_fee_rate`
+* `estimate_fee_rate(estimate_mode, enable_fallback)`
+    * `estimate_mode`: [`EstimateMode`](#type-estimatemode) `|` `null`
+    * `enable_fallback`: `boolean` `|` `null`
+* result: [`Uint64`](#type-uint64)
+
+Get fee estimates.
+
+###### Params
+
+* `estimate_mode` - The fee estimate mode.
+
+  Default: `no_priority`.
+
+* `enable_fallback` - True to enable a simple fallback algorithm, when lack of historical empirical data to estimate fee rates with configured algorithm.
+
+  Default: `true`.
+
+####### The fallback algorithm
+
+Since CKB transaction confirmation involves a two-step process—1) propose and 2) commit, it is complex to
+predict the transaction fee accurately with the expectation that it will be included within a certain block height.
+
+This algorithm relies on two assumptions and uses a simple strategy to estimate the transaction fee: 1) all transactions
+in the pool are waiting to be proposed, and 2) no new transactions will be added to the pool.
+
+In practice, this simple algorithm should achieve good accuracy fee rate and running performance.
+
+###### Returns
+
+The estimated fee rate in shannons per kilobyte.
+
+###### Examples
+
+Request
+
+```json
+{
+  "id": 42,
+  "jsonrpc": "2.0",
+  "method": "estimate_fee_rate",
+  "params": []
+}
+```
+
+Response
+
+```json
+{
+  "id": 42,
+  "jsonrpc": "2.0",
+  "result": "0x3e8"
 }
 ```
 
@@ -3549,6 +3611,95 @@ Response
 }
 ```
 
+<a id="integration_test-send_test_transaction"></a>
+#### Method `send_test_transaction`
+* `send_test_transaction(tx, outputs_validator)`
+    * `tx`: [`Transaction`](#type-transaction)
+    * `outputs_validator`: [`OutputsValidator`](#type-outputsvalidator) `|` `null`
+* result: [`H256`](#type-h256)
+
+Submits a new test local transaction into the transaction pool, only for testing.
+If the transaction is already in the pool, rebroadcast it to peers.
+
+###### Params
+
+* `transaction` - The transaction.
+* `outputs_validator` - Validates the transaction outputs before entering the tx-pool. (**Optional**, default is "passthrough").
+
+###### Errors
+
+* [`PoolRejectedTransactionByOutputsValidator (-1102)`](../enum.RPCError.html#variant.PoolRejectedTransactionByOutputsValidator) - The transaction is rejected by the validator specified by `outputs_validator`. If you really want to send transactions with advanced scripts, please set `outputs_validator` to "passthrough".
+* [`PoolRejectedTransactionByMinFeeRate (-1104)`](../enum.RPCError.html#variant.PoolRejectedTransactionByMinFeeRate) - The transaction fee rate must be greater than or equal to the config option `tx_pool.min_fee_rate`.
+* [`PoolRejectedTransactionByMaxAncestorsCountLimit (-1105)`](../enum.RPCError.html#variant.PoolRejectedTransactionByMaxAncestorsCountLimit) - The ancestors count must be greater than or equal to the config option `tx_pool.max_ancestors_count`.
+* [`PoolIsFull (-1106)`](../enum.RPCError.html#variant.PoolIsFull) - Pool is full.
+* [`PoolRejectedDuplicatedTransaction (-1107)`](../enum.RPCError.html#variant.PoolRejectedDuplicatedTransaction) - The transaction is already in the pool.
+* [`TransactionFailedToResolve (-301)`](../enum.RPCError.html#variant.TransactionFailedToResolve) - Failed to resolve the referenced cells and headers used in the transaction, as inputs or dependencies.
+* [`TransactionFailedToVerify (-302)`](../enum.RPCError.html#variant.TransactionFailedToVerify) - Failed to verify the transaction.
+
+###### Examples
+
+Request
+
+```json
+{
+  "id": 42,
+  "jsonrpc": "2.0",
+  "method": "send_test_transaction",
+  "params": [
+    {
+      "cell_deps": [
+        {
+          "dep_type": "code",
+          "out_point": {
+            "index": "0x0",
+            "tx_hash": "0xa4037a893eb48e18ed4ef61034ce26eba9c585f15c9cee102ae58505565eccc3"
+          }
+        }
+      ],
+      "header_deps": [
+        "0x7978ec7ce5b507cfb52e149e36b1a23f6062ed150503c85bbf825da3599095ed"
+      ],
+      "inputs": [
+        {
+          "previous_output": {
+            "index": "0x0",
+            "tx_hash": "0x365698b50ca0da75dca2c87f9e7b563811d3b5813736b8cc62cc3b106faceb17"
+          },
+          "since": "0x0"
+        }
+      ],
+      "outputs": [
+        {
+          "capacity": "0x2540be400",
+          "lock": {
+            "code_hash": "0x28e83a1277d48add8e72fadaa9248559e1b632bab2bd60b27955ebc4c03800a5",
+            "hash_type": "data",
+            "args": "0x"
+          },
+          "type": null
+        }
+      ],
+      "outputs_data": [
+        "0x"
+      ],
+      "version": "0x0",
+      "witnesses": []
+    },
+    "passthrough"
+  ]
+}
+```
+
+Response
+
+```json
+{
+  "id": 42,
+  "jsonrpc": "2.0",
+  "result": "0xa0ef4eb5f4ceeb08a4c8524d84c5da95dce2f608e0ca2ec8091191b0f330c6e3"
+}
+```
+
 ### Module `Miner`
 - [👉 OpenRPC spec](http://playground.open-rpc.org/?uiSchema[appBar][ui:title]=CKB-Miner&uiSchema[appBar][ui:splitView]=false&uiSchema[appBar][ui:examplesDropdown]=false&uiSchema[appBar][ui:logoUrl]=https://raw.githubusercontent.com/nervosnetwork/ckb-rpc-resources/develop/ckb-logo.jpg&schemaUrl=https://raw.githubusercontent.com/nervosnetwork/ckb-rpc-resources/develop/json/miner_rpc_doc.json)
 
@@ -4150,7 +4301,10 @@ Response
     "min_chain_work_reached": true,
     "normal_time": "0x4e2",
     "orphan_blocks_count": "0x0",
-    "orphan_blocks_size": "0x0"
+    "tip_hash": "0xa5f5c85987a15de25661e5a214f2c1449cd803f071acc7999820f25246471f40",
+    "tip_number": "0x400",
+    "unverified_tip_hash": "0xa5f5c85987a15de25661e5a214f2c1449cd803f071acc7999820f25246471f40",
+    "unverified_tip_number": "0x400"
   }
 }
 ```
@@ -4616,7 +4770,8 @@ Response
     "tip_number": "0x400",
     "total_tx_cycles": "0x219",
     "total_tx_size": "0x112",
-    "tx_size_limit": "0x7d000"
+    "tx_size_limit": "0x7d000",
+    "verify_queue_size": "0x0"
   }
 }
 ```
@@ -4638,6 +4793,37 @@ Request
   "id": 42,
   "jsonrpc": "2.0",
   "method": "clear_tx_pool",
+  "params": []
+}
+```
+
+Response
+
+```json
+{
+  "id": 42,
+  "jsonrpc": "2.0",
+  "result": null
+}
+```
+
+<a id="pool-clear_tx_verify_queue"></a>
+#### Method `clear_tx_verify_queue`
+* `clear_tx_verify_queue()`
+
+* result: `null`
+
+Removes all transactions from the verification queue.
+
+###### Examples
+
+Request
+
+```json
+{
+  "id": 42,
+  "jsonrpc": "2.0",
+  "method": "clear_tx_verify_queue",
   "params": []
 }
 ```
@@ -5936,6 +6122,15 @@ Response result of the RPC method `estimate_cycles`.
 
 * `cycles`: [`Uint64`](#type-uint64) - The count of cycles that the VM has consumed to verify this transaction.
 
+### Type `EstimateMode`
+The fee estimate mode.
+
+It's an enum value from one of:
+  - no_priority : No priority, expect the transaction to be committed in 1 hour.
+  - low_priority : Low priority, expect the transaction to be committed in 30 minutes.
+  - medium_priority : Medium priority, expect the transaction to be committed in 10 minutes.
+  - high_priority : High priority, expect the transaction to be committed as soon as possible.
+
 ### Type `ExtraLoggerConfig`
 Runtime logger config for extra loggers.
 
@@ -6873,7 +7068,13 @@ The overall chain synchronization state of this local node.
 
     If this number is too high, it indicates that block download has stuck at some block.
 
-* `orphan_blocks_size`: [`Uint64`](#type-uint64) - The size of all download orphan blocks
+* `tip_hash`: [`H256`](#type-h256) - The block hash of current tip block
+
+* `tip_number`: [`Uint64`](#type-uint64) - The block number of current tip block
+
+* `unverified_tip_hash`: [`H256`](#type-h256) - The block hash of current unverified tip block
+
+* `unverified_tip_number`: [`Uint64`](#type-uint64) - The block number of current unverified tip block
 
 ### Type `Timestamp`
 
@@ -7150,6 +7351,8 @@ Transaction pool information.
 * `tx_size_limit`: [`Uint64`](#type-uint64) - Limiting transactions to tx_size_limit
 
     Transactions with a large size close to the block size limit may not be packaged, because the block header and cellbase are occupied, so the tx-pool is limited to accepting transaction up to tx_size_limit.
+
+* `verify_queue_size`: [`Uint64`](#type-uint64) - verify_queue size
 
 ### Type `TxStatus`
 Transaction status and the block hash if it is committed.

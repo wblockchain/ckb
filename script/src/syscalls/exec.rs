@@ -1,74 +1,63 @@
 use crate::cost_model::transferred_byte_cycles;
-use crate::syscalls::utils::load_c_string;
 use crate::syscalls::{
-    Place, Source, SourceEntry, EXEC, INDEX_OUT_OF_BOUND, SLICE_OUT_OF_BOUND, WRONG_FORMAT,
+    Place, Source, SourceEntry, EXEC, INDEX_OUT_OF_BOUND, MAX_ARGV_LENGTH, SLICE_OUT_OF_BOUND,
+    WRONG_FORMAT,
 };
-use crate::types::Indices;
+use crate::types::SgData;
 use ckb_traits::CellDataProvider;
-use ckb_types::core::cell::{CellMeta, ResolvedTransaction};
+use ckb_types::core::cell::CellMeta;
+use ckb_types::core::error::ARGV_TOO_LONG_TEXT;
 use ckb_types::packed::{Bytes as PackedBytes, BytesVec};
+use ckb_vm::memory::load_c_string_byte_by_byte;
 use ckb_vm::Memory;
 use ckb_vm::{
     registers::{A0, A1, A2, A3, A4, A5, A7},
     Error as VMError, Register, SupportMachine, Syscalls,
 };
 use ckb_vm::{DEFAULT_STACK_SIZE, RISCV_MAX_MEMORY};
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct Exec<DL> {
-    data_loader: DL,
-    rtx: Arc<ResolvedTransaction>,
-    outputs: Arc<Vec<CellMeta>>,
-    group_inputs: Indices,
-    group_outputs: Indices,
+    sg_data: SgData<DL>,
 }
 
-impl<DL: CellDataProvider> Exec<DL> {
-    pub fn new(
-        data_loader: DL,
-        rtx: Arc<ResolvedTransaction>,
-        outputs: Arc<Vec<CellMeta>>,
-        group_inputs: Indices,
-        group_outputs: Indices,
-    ) -> Exec<DL> {
+impl<DL: CellDataProvider + Clone> Exec<DL> {
+    pub fn new(sg_data: &SgData<DL>) -> Exec<DL> {
         Exec {
-            data_loader,
-            rtx,
-            outputs,
-            group_inputs,
-            group_outputs,
+            sg_data: sg_data.clone(),
         }
     }
 
     #[inline]
     fn resolved_inputs(&self) -> &Vec<CellMeta> {
-        &self.rtx.resolved_inputs
+        &self.sg_data.rtx.resolved_inputs
     }
 
     #[inline]
     fn resolved_cell_deps(&self) -> &Vec<CellMeta> {
-        &self.rtx.resolved_cell_deps
+        &self.sg_data.rtx.resolved_cell_deps
     }
 
     #[inline]
     fn witnesses(&self) -> BytesVec {
-        self.rtx.transaction.witnesses()
+        self.sg_data.rtx.transaction.witnesses()
     }
 
     fn fetch_cell(&self, source: Source, index: usize) -> Result<&CellMeta, u8> {
         let cell_opt = match source {
             Source::Transaction(SourceEntry::Input) => self.resolved_inputs().get(index),
-            Source::Transaction(SourceEntry::Output) => self.outputs.get(index),
+            Source::Transaction(SourceEntry::Output) => self.sg_data.outputs().get(index),
             Source::Transaction(SourceEntry::CellDep) => self.resolved_cell_deps().get(index),
             Source::Group(SourceEntry::Input) => self
-                .group_inputs
+                .sg_data
+                .group_inputs()
                 .get(index)
                 .and_then(|actual_index| self.resolved_inputs().get(*actual_index)),
             Source::Group(SourceEntry::Output) => self
-                .group_outputs
+                .sg_data
+                .group_outputs()
                 .get(index)
-                .and_then(|actual_index| self.outputs.get(*actual_index)),
+                .and_then(|actual_index| self.sg_data.outputs().get(*actual_index)),
             Source::Transaction(SourceEntry::HeaderDep)
             | Source::Group(SourceEntry::CellDep)
             | Source::Group(SourceEntry::HeaderDep) => {
@@ -82,11 +71,13 @@ impl<DL: CellDataProvider> Exec<DL> {
     fn fetch_witness(&self, source: Source, index: usize) -> Result<PackedBytes, u8> {
         let witness_opt = match source {
             Source::Group(SourceEntry::Input) => self
-                .group_inputs
+                .sg_data
+                .group_inputs()
                 .get(index)
                 .and_then(|actual_index| self.witnesses().get(*actual_index)),
             Source::Group(SourceEntry::Output) => self
-                .group_outputs
+                .sg_data
+                .group_outputs()
                 .get(index)
                 .and_then(|actual_index| self.witnesses().get(*actual_index)),
             Source::Transaction(SourceEntry::Input) => self.witnesses().get(index),
@@ -100,7 +91,7 @@ impl<DL: CellDataProvider> Exec<DL> {
     }
 }
 
-impl<Mac: SupportMachine, DL: CellDataProvider + Send + Sync> Syscalls<Mac> for Exec<DL> {
+impl<Mac: SupportMachine, DL: CellDataProvider + Send + Sync + Clone> Syscalls<Mac> for Exec<DL> {
     fn initialize(&mut self, _machine: &mut Mac) -> Result<(), VMError> {
         Ok(())
     }
@@ -109,7 +100,6 @@ impl<Mac: SupportMachine, DL: CellDataProvider + Send + Sync> Syscalls<Mac> for 
         if machine.registers()[A7].to_u64() != EXEC {
             return Ok(false);
         }
-
         let index = machine.registers()[A0].to_u64();
         let source = Source::parse_from_u64(machine.registers()[A1].to_u64())?;
         let place = Place::parse_from_u64(machine.registers()[A2].to_u64())?;
@@ -125,12 +115,15 @@ impl<Mac: SupportMachine, DL: CellDataProvider + Send + Sync> Syscalls<Mac> for 
                     return Ok(true);
                 }
                 let cell = cell.unwrap();
-                self.data_loader.load_cell_data(cell).ok_or_else(|| {
-                    VMError::Unexpected(format!(
-                        "Unexpected load_cell_data failed {}",
-                        cell.out_point,
-                    ))
-                })?
+                self.sg_data
+                    .data_loader()
+                    .load_cell_data(cell)
+                    .ok_or_else(|| {
+                        VMError::Unexpected(format!(
+                            "Unexpected load_cell_data failed {}",
+                            cell.out_point,
+                        ))
+                    })?
             }
             Place::Witness => {
                 let witness = self.fetch_witness(source, index as usize);
@@ -150,6 +143,7 @@ impl<Mac: SupportMachine, DL: CellDataProvider + Send + Sync> Syscalls<Mac> for 
         let data = if length == 0 {
             data.slice(offset..data_size)
         } else {
+            // Both offset and length are <= u32::MAX, so offset.checked_add(length) will be always a Some.
             let end = offset.checked_add(length).ok_or(VMError::MemOutOfBound)?;
             if end > data_size {
                 machine.set_register(A0, Mac::REG::from_u8(SLICE_OUT_OF_BOUND));
@@ -160,14 +154,21 @@ impl<Mac: SupportMachine, DL: CellDataProvider + Send + Sync> Syscalls<Mac> for 
         let argc = machine.registers()[A4].to_u64();
         let mut addr = machine.registers()[A5].to_u64();
         let mut argv = Vec::new();
+        let mut argv_length: u64 = 0;
         for _ in 0..argc {
-            let target_addr = machine
-                .memory_mut()
-                .load64(&Mac::REG::from_u64(addr))?
-                .to_u64();
-
-            let cstr = load_c_string(machine, target_addr)?;
+            let target_addr = machine.memory_mut().load64(&Mac::REG::from_u64(addr))?;
+            let cstr = load_c_string_byte_by_byte(machine.memory_mut(), &target_addr)?;
+            let cstr_len = cstr.len();
             argv.push(cstr);
+
+            // Number of argv entries should also be considered
+            argv_length = argv_length
+                .saturating_add(8)
+                .saturating_add(cstr_len as u64);
+            if argv_length > MAX_ARGV_LENGTH {
+                return Err(VMError::Unexpected(ARGV_TOO_LONG_TEXT.to_string()));
+            }
+
             addr += 8;
         }
 
@@ -187,7 +188,7 @@ impl<Mac: SupportMachine, DL: CellDataProvider + Send + Sync> Syscalls<Mac> for 
         }
 
         match machine.initialize_stack(
-            &argv,
+            argv.into_iter().map(Ok),
             (RISCV_MAX_MEMORY - DEFAULT_STACK_SIZE) as u64,
             DEFAULT_STACK_SIZE as u64,
         ) {

@@ -1,4 +1,4 @@
-use crate::syscalls::tests::utils::MockDataLoader;
+use crate::{syscalls::tests::utils::*, types::VmContext};
 use ckb_types::{
     bytes::Bytes,
     core::{
@@ -53,52 +53,21 @@ fn test_current_cycles() {
 
     machine.set_cycles(cycles);
 
-    let result = CurrentCycles::new(0).ecall(&mut machine);
+    let rtx = Arc::new(ResolvedTransaction {
+        transaction: TransactionBuilder::default().build(),
+        resolved_cell_deps: vec![],
+        resolved_inputs: vec![],
+        resolved_dep_groups: vec![],
+    });
+
+    let sg_data = build_sg_data(rtx, vec![], vec![]);
+
+    let vm_context = VmContext::new(&sg_data, &Arc::new(Mutex::new(Vec::new())));
+
+    let result = CurrentCycles::new(&vm_context).ecall(&mut machine);
 
     assert!(result.unwrap());
     assert_eq!(machine.registers()[A0], cycles);
-}
-
-#[test]
-fn test_get_memory_limit() {
-    let mut machine = SCRIPT_VERSION.init_core_machine_without_limit();
-
-    machine.set_register(A0, 0);
-    machine.set_register(A1, 0);
-    machine.set_register(A2, 0);
-    machine.set_register(A3, 0);
-    machine.set_register(A4, 0);
-    machine.set_register(A5, 0);
-    machine.set_register(A7, GET_MEMORY_LIMIT);
-
-    let result = GetMemoryLimit::new(8).ecall(&mut machine);
-
-    assert!(result.unwrap());
-    assert_eq!(machine.registers()[A0], 8);
-}
-
-#[test]
-fn test_set_content() {
-    let mut machine = SCRIPT_VERSION.init_core_machine_without_limit();
-    machine.memory_mut().store64(&20000, &10).unwrap();
-    machine
-        .memory_mut()
-        .store_bytes(30000, &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
-        .unwrap();
-
-    machine.set_register(A0, 30000);
-    machine.set_register(A1, 20000);
-    machine.set_register(A2, 0);
-    machine.set_register(A3, 0);
-    machine.set_register(A4, 0);
-    machine.set_register(A5, 0);
-    machine.set_register(A7, SET_CONTENT);
-
-    let content_data = Arc::new(Mutex::new(vec![]));
-    let result = SetContent::new(content_data, 5).ecall(&mut machine);
-
-    assert!(result.unwrap());
-    assert_eq!(machine.memory_mut().load64(&20000).unwrap(), 5);
 }
 
 fn _test_load_extension(
@@ -141,7 +110,6 @@ fn _test_load_extension(
         extensions,
         ..Default::default()
     };
-    let group_inputs = Arc::new(vec![0]);
 
     let rtx = Arc::new(ResolvedTransaction {
         transaction: TransactionBuilder::default()
@@ -152,8 +120,9 @@ fn _test_load_extension(
         resolved_dep_groups: vec![],
     });
 
-    let mut load_block_extension: LoadBlockExtension<MockDataLoader> =
-        LoadBlockExtension::new(data_loader, rtx, group_inputs);
+    let sg_data = build_sg_data_with_loader(rtx, data_loader, vec![0], vec![]);
+
+    let mut load_block_extension = LoadBlockExtension::new(&sg_data);
 
     prop_assert!(machine
         .memory_mut()
