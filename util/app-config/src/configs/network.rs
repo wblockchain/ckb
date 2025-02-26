@@ -83,11 +83,18 @@ pub struct Config {
     /// Network use reuse port or not
     #[serde(default = "default_reuse")]
     pub reuse_port_on_linux: bool,
+    /// Allow ckb to upgrade tcp listening to tcp + ws listening
+    #[serde(default = "default_reuse_tcp_with_ws")]
+    pub reuse_tcp_with_ws: bool,
     /// Chain synchronization config options.
     #[serde(default)]
     pub sync: SyncConfig,
     /// Tentacle inner channel_size.
     pub channel_size: Option<usize>,
+
+    #[cfg(target_family = "wasm")]
+    #[serde(skip)]
+    pub secret_key: [u8; 32],
 }
 
 /// Chain synchronization config options.
@@ -99,7 +106,7 @@ pub struct SyncConfig {
     pub header_map: HeaderMapConfig,
     /// Block hash of assume valid target
     #[serde(skip, default)]
-    pub assume_valid_target: Option<H256>,
+    pub assume_valid_targets: Option<Vec<H256>>,
     /// Proof of minimum work during synchronization
     #[serde(skip, default)]
     pub min_chain_work: U256,
@@ -167,7 +174,8 @@ pub fn default_support_all_protocols() -> Vec<SupportProtocol> {
     ]
 }
 
-pub(crate) fn generate_random_key() -> [u8; 32] {
+/// Generate random secp256k1 key
+pub fn generate_random_key() -> [u8; 32] {
     loop {
         let mut key: [u8; 32] = [0; 32];
         rand::thread_rng().fill(&mut key);
@@ -177,10 +185,12 @@ pub(crate) fn generate_random_key() -> [u8; 32] {
     }
 }
 
-pub(crate) fn write_secret_to_file(secret: &[u8], path: PathBuf) -> Result<(), Error> {
+/// Secret key storage
+pub fn write_secret_to_file(secret: &[u8], path: PathBuf) -> Result<(), Error> {
     fs::OpenOptions::new()
         .create(true)
         .write(true)
+        .truncate(true)
         .open(path)
         .and_then(|mut file| {
             file.write_all(secret)?;
@@ -198,7 +208,8 @@ pub(crate) fn write_secret_to_file(secret: &[u8], path: PathBuf) -> Result<(), E
         })
 }
 
-pub(crate) fn read_secret_key(path: PathBuf) -> Result<Option<secio::SecioKeyPair>, Error> {
+/// Load secret key from path
+pub fn read_secret_key(path: PathBuf) -> Result<Option<secio::SecioKeyPair>, Error> {
     let mut file = match fs::File::open(path.clone()) {
         Ok(file) => file,
         Err(_) => return Ok(None),
@@ -280,12 +291,14 @@ impl Config {
     /// Reads the secret key from secret key file.
     ///
     /// If the key file does not exists, it returns `Ok(None)`.
+    #[cfg(not(target_family = "wasm"))]
     fn read_secret_key(&self) -> Result<Option<secio::SecioKeyPair>, Error> {
         let path = self.secret_key_path();
         read_secret_key(path)
     }
 
     /// Generates a random secret key and saves it into the file.
+    #[cfg(not(target_family = "wasm"))]
     fn write_secret_key_to_file(&self) -> Result<(), Error> {
         let path = self.secret_key_path();
         let random_key_pair = generate_random_key();
@@ -293,6 +306,7 @@ impl Config {
     }
 
     /// Reads the private key from file or generates one if the file does not exist.
+    #[cfg(not(target_family = "wasm"))]
     pub fn fetch_private_key(&self) -> Result<secio::SecioKeyPair, Error> {
         match self.read_secret_key()? {
             Some(key) => Ok(key),
@@ -300,6 +314,19 @@ impl Config {
                 self.write_secret_key_to_file()?;
                 Ok(self.read_secret_key()?.expect("key must exists"))
             }
+        }
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub fn fetch_private_key(&self) -> Result<secio::SecioKeyPair, Error> {
+        if self.secret_key == [0; 32] {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "invalid secret key data",
+            ));
+        } else {
+            secio::SecioKeyPair::secp256k1_raw_key(&self.secret_key)
+                .map_err(|_| Error::new(ErrorKind::InvalidData, "invalid secret key data"))
         }
     }
 
@@ -327,5 +354,10 @@ impl Config {
 /// By default, using reuse port can make any outbound connection of the node become a potential
 /// listen address, which will help the robustness of our network
 const fn default_reuse() -> bool {
+    true
+}
+
+/// By default, allow ckb to upgrade tcp listening to tcp + ws listening
+const fn default_reuse_tcp_with_ws() -> bool {
     true
 }

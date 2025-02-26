@@ -43,6 +43,7 @@ impl DnsSeedingService {
         }
     }
 
+    #[allow(clippy::const_is_empty)]
     async fn seeding(&self) -> Result<(), Box<dyn Error>> {
         // TODO: DNS seeding is disabled now, may enable in the future (need discussed)
         if TXT_VERIFY_PUBKEY.is_empty() {
@@ -67,7 +68,7 @@ impl DnsSeedingService {
         let pubkey = PublicKey::from_slice(&pubkey_bytes)
             .map_err(|err| format!("create PublicKey failed: {err:?}"))?;
 
-        let resolver = trust_dns_resolver::AsyncResolver::tokio_from_system_conf()
+        let resolver = hickory_resolver::AsyncResolver::tokio_from_system_conf()
             .map_err(|err| format!("Failed to create DNS resolver: {err}"))?;
 
         let mut addrs = Vec::new();

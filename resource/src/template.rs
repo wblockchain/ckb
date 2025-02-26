@@ -1,7 +1,7 @@
 /// Default chain spec.
 pub const DEFAULT_SPEC: &str = "mainnet";
 /// The list of bundled chain specs.
-pub const AVAILABLE_SPECS: &[&str] = &["mainnet", "testnet", "staging", "dev"];
+pub const AVAILABLE_SPECS: &[&str] = &["mainnet", "testnet", "preview", "staging", "dev"];
 /// The default RPC listen port *8114*.
 pub const DEFAULT_RPC_PORT: &str = "8114";
 /// The default P2P listen port *8115*.
@@ -128,6 +128,7 @@ impl Template {
     }
 }
 
+#[allow(unexpected_cfgs)]
 fn writeln<W: io::Write>(w: &mut W, s: &str, context: &TemplateContext) -> io::Result<()> {
     #[cfg(docker)]
     let s = s.replace("127.0.0.1:{rpc_port}", "0.0.0.0:{rpc_port}");

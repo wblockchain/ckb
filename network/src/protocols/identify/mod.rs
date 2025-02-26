@@ -1,9 +1,9 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{atomic::Ordering, Arc};
-use std::time::{Duration, Instant};
 
 use ckb_logger::{debug, error, trace, warn};
+use ckb_systemtime::{Duration, Instant};
 use p2p::{
     async_trait,
     bytes::Bytes,
@@ -31,6 +31,7 @@ const DEFAULT_TIMEOUT: u64 = 8;
 const MAX_ADDRS: usize = 10;
 
 /// The misbehavior to report to underlying peer storage
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum Misbehavior {
     /// Repeat received message
@@ -138,10 +139,9 @@ impl<T: Callback> IdentifyProtocol<T> {
             let global_ip_only = self.global_ip_only;
             let reachable_addrs = listens
                 .into_iter()
-                .filter(|addr| {
-                    multiaddr_to_socketaddr(addr)
-                        .map(|socket_addr| !global_ip_only || is_reachable(socket_addr.ip()))
-                        .unwrap_or(false)
+                .filter(|addr| match multiaddr_to_socketaddr(addr) {
+                    Some(socket_addr) => !global_ip_only || is_reachable(socket_addr.ip()),
+                    None => true,
                 })
                 .collect::<Vec<_>>();
             self.callback
@@ -462,10 +462,9 @@ impl Callback for IdentifyCallback {
                         });
                     }
 
-                    if self
-                        .network_state
-                        .with_peer_registry(|reg| reg.is_feeler(&context.session.address))
-                    {
+                    if self.network_state.with_peer_registry_mut(|reg| {
+                        reg.change_feeler_flags(&context.session.address, flags)
+                    }) {
                         let _ = context
                             .open_protocols(
                                 context.session.id,

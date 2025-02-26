@@ -625,6 +625,7 @@ pub trait ChainRpc {
     ///       "block_hash": null,
     ///       "block_number": null,
     ///       "status": "pending",
+    ///       "tx_index": null,
     ///       "reason": null
     ///     }
     ///   }
@@ -645,6 +646,7 @@ pub trait ChainRpc {
     ///       "block_hash": null,
     ///       "block_number": null,
     ///       "status": "pending",
+    ///       "tx_index": null,
     ///       "reason": null
     ///     }
     ///   }
@@ -1357,8 +1359,8 @@ pub trait ChainRpc {
     ///             { "rfc": "0032", "epoch_number": "0x1526" },
     ///             { "rfc": "0036", "epoch_number": "0x0" },
     ///             { "rfc": "0038", "epoch_number": "0x0" },
-    ///             { "rfc": "0048", "epoch_number": null },
-    ///             { "rfc": "0049", "epoch_number": null }
+    ///             { "rfc": "0048", "epoch_number": "0x3005" },
+    ///             { "rfc": "0049", "epoch_number": "0x3005" }
     ///          ],
     ///         "id": "main",
     ///         "initial_primary_epoch_reward": "0x71afd498d000",
@@ -2159,6 +2161,7 @@ impl ChainRpcImpl {
                 None,
                 tx_info.block_number,
                 tx_info.block_hash.unpack(),
+                tx_info.index as u32,
                 cycles,
                 None,
             ));
@@ -2207,6 +2210,7 @@ impl ChainRpcImpl {
                 Some(tx),
                 tx_info.block_number,
                 tx_info.block_hash.unpack(),
+                tx_info.index as u32,
                 cycles,
                 None,
             ));

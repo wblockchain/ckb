@@ -1,6 +1,8 @@
 //! Type used on peer store
 use crate::{
-    peer_store::{Score, SessionType, ADDR_MAX_FAILURES, ADDR_MAX_RETRIES, ADDR_TIMEOUT_MS},
+    peer_store::{
+        base_addr, Score, SessionType, ADDR_MAX_FAILURES, ADDR_MAX_RETRIES, ADDR_TIMEOUT_MS,
+    },
     Flags,
 };
 use ipnetwork::IpNetwork;
@@ -62,7 +64,8 @@ impl AddrInfo {
     /// Init
     pub fn new(addr: Multiaddr, last_connected_at_ms: u64, score: Score, flags: u64) -> Self {
         AddrInfo {
-            addr,
+            // only store tcp protocol
+            addr: base_addr(&addr),
             score,
             last_connected_at_ms,
             last_tried_at_ms: 0,

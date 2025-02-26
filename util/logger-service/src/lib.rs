@@ -4,11 +4,11 @@ use backtrace::Backtrace;
 use ckb_channel::{self, unbounded};
 use env_logger::filter::{Builder, Filter};
 use log::{LevelFilter, Log, Metadata, Record, SetLoggerError};
-use once_cell::sync::OnceCell;
 use regex::Regex;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::{fs, panic, process, sync, thread};
 use time::{
     format_description::{self, FormatItem},
@@ -22,9 +22,9 @@ use yansi::Paint;
 #[cfg(test)]
 mod tests;
 
-static CONTROL_HANDLE: OnceCell<ckb_channel::Sender<Message>> = OnceCell::new();
-static FORMAT: OnceCell<Vec<FormatItem<'static>>> = OnceCell::new();
-static RE: OnceCell<regex::Regex> = OnceCell::new();
+static CONTROL_HANDLE: OnceLock<ckb_channel::Sender<Message>> = OnceLock::new();
+static FORMAT: OnceLock<Vec<FormatItem<'static>>> = OnceLock::new();
+static RE: OnceLock<regex::Regex> = OnceLock::new();
 
 enum Message {
     Record {
@@ -526,4 +526,28 @@ fn setup_panic_logger() {
         );
     };
     panic::set_hook(Box::new(panic_logger));
+}
+
+/// Only used by unit test
+/// Initializes the [Logger](struct.Logger.html) and run the logging service.
+pub fn init_for_test(filter: &str) -> Result<LoggerInitGuard, SetLoggerError> {
+    setup_panic_logger();
+    let config: Config = Config {
+        filter: Some(filter.to_string()),
+        color: true,
+        log_to_stdout: true,
+        log_to_file: false,
+
+        emit_sentry_breadcrumbs: None,
+        file: Default::default(),
+        log_dir: Default::default(),
+        extra: Default::default(),
+    };
+
+    let logger = Logger::new(None, config);
+    let filter = logger.filter();
+    log::set_boxed_logger(Box::new(logger)).map(|_| {
+        log::set_max_level(filter);
+        LoggerInitGuard
+    })
 }

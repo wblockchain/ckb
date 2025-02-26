@@ -5,11 +5,11 @@ use crate::{
 use ckb_app_config::{
     BlockAssemblerConfig, NetworkAlertConfig, NetworkConfig, RpcConfig, RpcModule,
 };
-use ckb_chain::chain::ChainService;
+use ckb_chain::start_chain_services;
 use ckb_chain_spec::consensus::{Consensus, ConsensusBuilder};
 use ckb_chain_spec::versionbits::{ActiveMode, Deployment, DeploymentPos};
 use ckb_dao_utils::genesis_dao_data;
-use ckb_network::{Flags, NetworkService, NetworkState};
+use ckb_network::{network::TransportType, Flags, NetworkService, NetworkState};
 use ckb_network_alert::alert_relayer::AlertRelayer;
 use ckb_notify::NotifyService;
 use ckb_shared::SharedBuilder;
@@ -88,8 +88,7 @@ pub(crate) fn setup_rpc_test_suite(height: u64, consensus: Option<Consensus>) ->
         }))
         .build()
         .unwrap();
-    let chain_controller =
-        ChainService::new(shared.clone(), pack.take_proposal_table()).start::<&str>(None);
+    let chain_controller = start_chain_services(pack.take_chain_services_builder());
 
     // Start network services
     let temp_dir = tempfile::tempdir().expect("create tmp_dir failed");
@@ -113,6 +112,7 @@ pub(crate) fn setup_rpc_test_suite(height: u64, consensus: Option<Consensus>) ->
                 "0.1.0".to_string(),
                 Flags::COMPATIBILITY,
             ),
+            TransportType::Tcp,
         )
         .start(shared.async_handle())
         .expect("Start network service failed")
@@ -132,7 +132,7 @@ pub(crate) fn setup_rpc_test_suite(height: u64, consensus: Option<Consensus>) ->
     for _ in 0..height {
         let block = next_block(&shared, &parent.header());
         chain_controller
-            .internal_process_block(Arc::new(block.clone()), Switch::DISABLE_EXTENSION)
+            .blocking_process_block_with_switch(Arc::new(block.clone()), Switch::DISABLE_EXTENSION)
             .expect("processing new block should be ok");
         parent = block;
     }
@@ -178,6 +178,7 @@ pub(crate) fn setup_rpc_test_suite(height: u64, consensus: Option<Consensus>) ->
         ws_listen_address: None,
         max_request_body_size: 20_000_000,
         threads: None,
+        rpc_batch_limit: Some(1000),
         // enable all rpc modules in unit test
         modules: vec![
             RpcModule::Net,
@@ -207,13 +208,19 @@ pub(crate) fn setup_rpc_test_suite(height: u64, consensus: Option<Consensus>) ->
             chain_controller.clone(),
             true,
         )
-        .enable_net(network_controller.clone(), sync_shared)
+        .enable_net(
+            network_controller.clone(),
+            sync_shared,
+            Arc::new(chain_controller.clone()),
+        )
         .enable_stats(shared.clone(), Arc::clone(&alert_notifier))
         .enable_experiment(shared.clone())
         .enable_integration_test(
             shared.clone(),
             network_controller.clone(),
             chain_controller.clone(),
+            vec![],
+            vec![],
         )
         .enable_debug()
         .enable_alert(alert_verifier, alert_notifier, network_controller);
@@ -257,7 +264,7 @@ pub(crate) fn setup_rpc_test_suite(height: u64, consensus: Option<Consensus>) ->
             )
             .build();
         chain_controller
-            .internal_process_block(Arc::new(fork_block), Switch::DISABLE_EXTENSION)
+            .blocking_process_block_with_switch(Arc::new(fork_block), Switch::DISABLE_EXTENSION)
             .expect("processing new block should be ok");
     }
 

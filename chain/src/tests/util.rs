@@ -1,10 +1,10 @@
-use crate::chain::{ChainController, ChainService};
+use crate::{start_chain_services, ChainController};
 use ckb_app_config::TxPoolConfig;
 use ckb_app_config::{BlockAssemblerConfig, NetworkConfig};
 use ckb_chain_spec::consensus::{Consensus, ConsensusBuilder};
 use ckb_dao_utils::genesis_dao_data;
 use ckb_jsonrpc_types::ScriptHashType;
-use ckb_network::{Flags, NetworkController, NetworkService, NetworkState};
+use ckb_network::{network::TransportType, Flags, NetworkController, NetworkService, NetworkState};
 use ckb_shared::{Shared, SharedBuilder};
 use ckb_store::ChainStore;
 use ckb_test_chain_utils::{always_success_cell, create_always_success_tx};
@@ -85,8 +85,7 @@ pub(crate) fn start_chain_with_tx_pool_config(
     let network = dummy_network(&shared);
     pack.take_tx_pool_builder().start(network);
 
-    let chain_service = ChainService::new(shared.clone(), pack.take_proposal_table());
-    let chain_controller = chain_service.start::<&str>(None);
+    let chain_controller = start_chain_services(pack.take_chain_services_builder());
     let parent = {
         let snapshot = shared.snapshot();
         snapshot
@@ -124,6 +123,7 @@ pub(crate) fn dummy_network(shared: &Shared) -> NetworkController {
             "test".to_string(),
             Flags::COMPATIBILITY,
         ),
+        TransportType::Tcp,
     )
     .start(shared.async_handle())
     .expect("Start network service failed")

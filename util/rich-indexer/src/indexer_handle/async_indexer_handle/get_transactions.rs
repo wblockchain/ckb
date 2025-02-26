@@ -24,6 +24,12 @@ impl AsyncRichIndexerHandle {
         if limit == 0 {
             return Err(Error::invalid_params("limit should be greater than 0"));
         }
+        if limit as usize > self.request_limit {
+            return Err(Error::invalid_params(format!(
+                "limit must be less than {}",
+                self.request_limit,
+            )));
+        }
         search_key.filter = convert_max_values_in_search_filter(&search_key.filter);
 
         let mut tx = self
@@ -243,7 +249,7 @@ pub async fn get_tx_with_cell(
 
     // fetch
     let outputs = query
-        .fetch_all(&mut *tx)
+        .fetch_all(tx.as_mut())
         .await
         .map_err(|err| Error::DB(err.to_string()))?
         .iter()
@@ -393,7 +399,7 @@ pub async fn get_tx_with_cells(
 
     // fetch
     let outputs = query
-        .fetch_all(&mut *tx)
+        .fetch_all(tx.as_mut())
         .await
         .map_err(|err| Error::DB(err.to_string()))?
         .iter()
@@ -435,7 +441,7 @@ fn build_tx_with_cell_union_sub_query(
         .field("output.tx_id AS tx_id")
         .field("1 AS io_type")
         .field("output.output_index AS io_index");
-    query_output_builder.join(&format!(
+    query_output_builder.join(format!(
         "{} AS query_script",
         build_query_script_id_sql(db_driver, &search_key.script_search_mode, &mut param_index)?
     ));
@@ -481,7 +487,7 @@ fn build_tx_with_cell_union_sub_query(
     query_input_builder
         .join("output")
         .on("output.id = input.output_id")
-        .join(&format!(
+        .join(format!(
             "{} AS query_script",
             build_query_script_id_sql(db_driver, &search_key.script_search_mode, &mut param_index)?
         ));
@@ -550,9 +556,9 @@ fn build_filter(
                     query_builder
                         .and_where_eq("type_script.hash_type", format!("${}", param_index));
                     *param_index += 1;
-                    query_builder.and_where_ge("type_script.args", &format!("${}", param_index));
+                    query_builder.and_where_ge("type_script.args", format!("${}", param_index));
                     *param_index += 1;
-                    query_builder.and_where_lt("type_script.args", &format!("${}", param_index));
+                    query_builder.and_where_lt("type_script.args", format!("${}", param_index));
                     *param_index += 1;
                 }
                 IndexerScriptType::Type => {
@@ -562,9 +568,9 @@ fn build_filter(
                     query_builder
                         .and_where_eq("lock_script.hash_type", format!("${}", param_index));
                     *param_index += 1;
-                    query_builder.and_where_ge("lock_script.args", &format!("${}", param_index));
+                    query_builder.and_where_ge("lock_script.args", format!("${}", param_index));
                     *param_index += 1;
-                    query_builder.and_where_lt("lock_script.args", &format!("${}", param_index));
+                    query_builder.and_where_lt("lock_script.args", format!("${}", param_index));
                     *param_index += 1;
                 }
             }
@@ -590,9 +596,9 @@ fn build_filter(
         if filter.output_data.is_some() {
             match filter.output_data_filter_mode {
                 Some(IndexerSearchMode::Prefix) | None => {
-                    query_builder.and_where_ge("output.data", &format!("${}", param_index));
+                    query_builder.and_where_ge("output.data", format!("${}", param_index));
                     *param_index += 1;
-                    query_builder.and_where_lt("output.data", &format!("${}", param_index));
+                    query_builder.and_where_lt("output.data", format!("${}", param_index));
                     *param_index += 1;
                 }
                 Some(IndexerSearchMode::Exact) => {
